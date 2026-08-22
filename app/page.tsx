@@ -71,13 +71,17 @@ function EndpointsTab({ endpoints, refresh }: { endpoints: Endpoint[]; refresh: 
 
   const add = async () => {
     if (!baseUrl || !model) return alert("Base URL and model are required.");
-    await api("/api/endpoints", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name || "unnamed", base_url: baseUrl, adapter, model, api_key: apiKey }),
-    });
-    setName(""); setBaseUrl(""); setModel(""); setApiKey("");
-    refresh();
+    try {
+      await api("/api/endpoints", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name || "unnamed", base_url: baseUrl, adapter, model, api_key: apiKey }),
+      });
+      setName(""); setBaseUrl(""); setModel(""); setApiKey("");
+      refresh();
+    } catch (e) {
+      alert("Failed to add endpoint: " + (e as Error).message);
+    }
   };
 
   const test = async (id: number) => {
@@ -91,8 +95,12 @@ function EndpointsTab({ endpoints, refresh }: { endpoints: Endpoint[]; refresh: 
   };
 
   const del = async (id: number) => {
-    await api(`/api/endpoints/${id}`, { method: "DELETE" });
-    refresh();
+    try {
+      await api(`/api/endpoints/${id}`, { method: "DELETE" });
+      refresh();
+    } catch (e) {
+      alert("Failed to delete endpoint: " + (e as Error).message);
+    }
   };
 
   return (
@@ -148,25 +156,33 @@ function PromptsTab({ cases, refresh }: { cases: PromptCase[]; refresh: () => vo
 
   const add = async () => {
     if (!user) return alert("User prompt is required.");
-    await api("/api/cases", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: name || "unnamed",
-        system_prompt: system,
-        user_prompt: user,
-        temperature: parseFloat(temp) || 0.7,
-        max_tokens: maxTokens ? parseInt(maxTokens, 10) : null,
-        seed: seed ? parseInt(seed, 10) : null,
-      }),
-    });
-    setName(""); setSystem(""); setUser(""); setMaxTokens(""); setSeed("");
-    refresh();
+    try {
+      await api("/api/cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name || "unnamed",
+          system_prompt: system,
+          user_prompt: user,
+          temperature: parseFloat(temp) || 0.7,
+          max_tokens: maxTokens ? parseInt(maxTokens, 10) : null,
+          seed: seed ? parseInt(seed, 10) : null,
+        }),
+      });
+      setName(""); setSystem(""); setUser(""); setMaxTokens(""); setSeed("");
+      refresh();
+    } catch (e) {
+      alert("Failed to add prompt case: " + (e as Error).message);
+    }
   };
 
   const del = async (id: number) => {
-    await api(`/api/cases/${id}`, { method: "DELETE" });
-    refresh();
+    try {
+      await api(`/api/cases/${id}`, { method: "DELETE" });
+      refresh();
+    } catch (e) {
+      alert("Failed to delete prompt case: " + (e as Error).message);
+    }
   };
 
   return (
