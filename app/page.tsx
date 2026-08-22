@@ -41,6 +41,10 @@ export default function Page() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [cases, setCases] = useState<PromptCase[]>([]);
   const [runs, setRuns] = useState<RunRow[]>([]);
+  // Which run the Results tab is showing. Lives here rather than inside
+  // ResultsTab so a freshly finished run can be selected from the Run
+  // tab, now that tabs stay mounted instead of remounting on switch.
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
 
   const refreshEndpoints = () => api<Endpoint[]>("/api/endpoints").then(setEndpoints);
   const refreshCases = () => api<PromptCase[]>("/api/cases").then(setCases);
@@ -51,6 +55,43 @@ export default function Page() {
     refreshCases();
     refreshRuns();
   }, []);
+
+  // Every tab stays mounted and inactive ones are hidden with CSS. If they
+  // were conditionally rendered, switching tabs would unmount the Run tab
+  // mid-run: its progress log would be thrown away, and because the run
+  // loop drives from the browser, the in-flight run would keep firing
+  // requests with nowhere to report them.
+  const panes: { id: Tab; node: React.ReactNode }[] = [
+    { id: "endpoints", node: <EndpointsTab endpoints={endpoints} refresh={refreshEndpoints} /> },
+    { id: "prompts", node: <PromptsTab cases={cases} refresh={refreshCases} /> },
+    {
+      id: "run",
+      node: (
+        <RunTab
+          endpoints={endpoints}
+          cases={cases}
+          onRunComplete={(id) => {
+            refreshRuns();
+            setSelectedRunId(id);
+            setTab("results");
+          }}
+        />
+      ),
+    },
+    {
+      id: "results",
+      node: (
+        <ResultsTab
+          endpoints={endpoints}
+          cases={cases}
+          runs={runs}
+          refreshRuns={refreshRuns}
+          runId={selectedRunId}
+          setRunId={setSelectedRunId}
+        />
+      ),
+    },
+  ];
 
   return (
     <>
@@ -65,14 +106,11 @@ export default function Page() {
         </nav>
       </header>
       <main>
-        {tab === "endpoints" && <EndpointsTab endpoints={endpoints} refresh={refreshEndpoints} />}
-        {tab === "prompts" && <PromptsTab cases={cases} refresh={refreshCases} />}
-        {tab === "run" && (
-          <RunTab endpoints={endpoints} cases={cases} onRunComplete={(id) => { refreshRuns(); setTab("results"); }} />
-        )}
-        {tab === "results" && (
-          <ResultsTab endpoints={endpoints} cases={cases} runs={runs} refreshRuns={refreshRuns} />
-        )}
+        {panes.map((p) => (
+          <div key={p.id} style={{ display: tab === p.id ? "block" : "none" }}>
+            {p.node}
+          </div>
+        ))}
       </main>
     </>
   );
@@ -301,6 +339,15 @@ function RunTab({
   const [status, setStatus] = useState("");
   const [elapsed, setElapsed] = useState(0);
 
+  // Warn before a reload/close discards an in-flight run: the loop lives
+  // in this tab, so leaving the page stops it partway through.
+  useEffect(() => {
+    if (!running) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [running]);
+
   // Tick an elapsed-seconds counter while a run is in flight. Without it
   // there's no sign of life during a slow first request -- a cold model
   // can take a minute before its first token arrives.
@@ -478,19 +525,23 @@ function ResultsTab({
   cases,
   runs,
   refreshRuns,
+  runId,
+  setRunId,
 }: {
   endpoints: Endpoint[];
   cases: PromptCase[];
   runs: RunRow[];
   refreshRuns: () => void;
+  runId: number | null;
+  setRunId: (id: number | null) => void;
 }) {
-  const [runId, setRunId] = useState<number | null>(null);
   const [results, setResults] = useState<RequestMetrics[]>([]);
   const [summaries, setSummaries] = useState<RunSummary[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     if (runId == null && runs.length > 0) setRunId(runs[0]!.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs, runId]);
 
   const load = async (id: number) => {
