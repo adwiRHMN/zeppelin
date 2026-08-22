@@ -102,7 +102,11 @@ export async function* runSequential(
       if (!promptCase) continue;
 
       if (request.warmup) {
-        await executeOnce(endpoint, promptCase, -1, true);
+        // Yield the warmup result too, even though summarize() filters it
+        // out of the stats. A cold model can take a minute to load, and
+        // swallowing this entirely leaves the UI silent for that whole
+        // time with no sign the run is alive.
+        yield await executeOnce(endpoint, promptCase, -1, true);
         if (request.delay_between_s) await sleep(request.delay_between_s);
       }
 

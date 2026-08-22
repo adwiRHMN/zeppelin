@@ -75,6 +75,14 @@ input, select, textarea {
   width: 100%;
 }
 
+/* Checkboxes must opt out of the full-width rule above, or they stretch
+   across the row and push their label text far to the right. */
+input[type="checkbox"] {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+
 textarea { resize: vertical; min-height: 60px; font-family: var(--mono); }
 
 button.primary {

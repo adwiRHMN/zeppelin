@@ -239,6 +239,19 @@ function RunTab({
   const [warmup, setWarmup] = useState(true);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<RequestMetrics[]>([]);
+  const [status, setStatus] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+
+  // Tick an elapsed-seconds counter while a run is in flight. Without it
+  // there's no sign of life during a slow first request -- a cold model
+  // can take a minute before its first token arrives.
+  useEffect(() => {
+    if (!running) return;
+    const started = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const toggle = (set: Set<number>, setFn: (s: Set<number>) => void, id: number) => {
     const next = new Set(set);
@@ -252,6 +265,7 @@ function RunTab({
     }
     setRunning(true);
     setLog([]);
+    setStatus(warmup ? "Starting run — warmup request first (cold models can take a while)…" : "Starting run…");
     try {
       const resp = await fetch("/api/runs/start", {
         method: "POST",
@@ -285,13 +299,23 @@ function RunTab({
           }
           if (!data) continue;
           const parsed = JSON.parse(data);
-          if (event === "run_start") runId = parsed.run_id;
-          else if (event === "result") setLog((l) => [...l, parsed]);
-          else if (event === "run_error") console.error(parsed.error);
+          if (event === "run_start") {
+            runId = parsed.run_id;
+            setStatus(`Run #${parsed.run_id} started — waiting for first response…`);
+          } else if (event === "result") {
+            setLog((l) => [...l, parsed]);
+            setStatus(parsed.is_warmup ? "Warmup done — starting timed requests…" : "Running…");
+          } else if (event === "run_error") {
+            setStatus("Run error: " + parsed.error);
+            console.error(parsed.error);
+          } else if (event === "run_done") {
+            setStatus("Run complete.");
+          }
         }
       }
       if (runId != null) onRunComplete(runId);
     } catch (e) {
+      setStatus("Run failed: " + (e as Error).message);
       alert("Run failed: " + (e as Error).message);
     } finally {
       setRunning(false);
@@ -343,6 +367,13 @@ function RunTab({
       </div>
       <div className="panel">
         <h2>Live progress</h2>
+        {(status || running) && (
+          <div className="progress-line">
+            {running && <span className="pill ok">running</span>}
+            <span>{status}</span>
+            {running && <span className="muted">{elapsed}s elapsed</span>}
+          </div>
+        )}
         <div>
           {log.map((m, i) => {
             const ep = endpoints.find((e) => e.id === m.endpoint_id);
@@ -350,12 +381,17 @@ function RunTab({
             return (
               <div key={i} className="progress-line">
                 <span className={`pill ${m.ok ? "ok" : "err"}`}>{m.ok ? "ok" : "error"}</span>
-                <b>{ep?.name ?? m.endpoint_id}</b> / {c?.name ?? m.case_id} #{m.run_index}
-                ttft={fmt(m.ttft_s)}s total={fmt(m.total_s)}s tok/s={fmt(m.decode_tokens_per_s, 1)}
+                {m.is_warmup && <span className="pill">warmup</span>}
+                <b>{ep?.name ?? m.endpoint_id}</b> / {c?.name ?? m.case_id}
+                {!m.is_warmup && ` #${m.run_index}`}
+                {" "}ttft={fmt(m.ttft_s)}s total={fmt(m.total_s)}s tok/s={fmt(m.decode_tokens_per_s, 1)}
                 {m.error_message && <span className="muted">{m.error_message}</span>}
               </div>
             );
           })}
+          {!log.length && !running && !status && (
+            <span className="muted">No run yet. Configure above and hit Start run.</span>
+          )}
         </div>
       </div>
     </>
