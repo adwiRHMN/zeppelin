@@ -26,12 +26,21 @@ async function main() {
   const schema = readFileSync(schemaPath, "utf-8");
 
   // The Neon driver's sql tag doesn't run multi-statement scripts, so
-  // split on ";" and run each statement individually. Fine for this
-  // schema (no functions or dollar-quoted bodies containing ";").
-  const statements = schema
+  // strip comment lines first, then split on ";" and run each statement
+  // individually. Stripping comments *before* splitting matters: a
+  // statement preceded by a comment on the previous line (no semicolon
+  // between them) would otherwise land in the same chunk as that
+  // comment, and a naive "does this chunk start with --" filter would
+  // discard the real statement along with it. Fine for this schema (no
+  // functions or dollar-quoted bodies containing ";").
+  const withoutComments = schema
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+  const statements = withoutComments
     .split(";")
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    .filter((s) => s.length > 0);
 
   for (const statement of statements) {
     await sql.query(statement);
