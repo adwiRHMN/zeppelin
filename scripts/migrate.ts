@@ -2,9 +2,18 @@
 // POSTGRES_URL) in the environment -- run `vercel env pull .env.local`
 // first after attaching a Neon/Postgres store to the project, or set it
 // manually for local dev against a Neon branch.
-import { readFileSync } from "node:fs";
+//
+// Unlike `next dev`/`build`/`start`, this script runs standalone via tsx,
+// outside Next's runtime -- Next auto-loads .env.local for its own
+// commands, but nothing does that for a plain script, so we load it here.
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { neon } from "@neondatabase/serverless";
+
+const envLocalPath = path.join(__dirname, "..", ".env.local");
+if (existsSync(envLocalPath)) {
+  process.loadEnvFile(envLocalPath);
+}
 
 async function main() {
   const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
