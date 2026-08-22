@@ -4,7 +4,7 @@ import { getEndpoint } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 15;
+export const maxDuration = 30;
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const endpoint = await getEndpoint(Number(params.id));
@@ -13,7 +13,11 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   const adapter = getAdapter(endpoint.adapter);
   try {
     const models = await adapter.listModels(endpoint);
-    return NextResponse.json({ ok: true, models });
+    // Reaching the server is only half the check -- a configured model
+    // name that isn't actually served will fail every run with a much
+    // less obvious error, so flag it here instead.
+    const modelFound = models.includes(endpoint.model);
+    return NextResponse.json({ ok: true, models, model_found: modelFound });
   } catch (exc) {
     return NextResponse.json({ ok: false, error: String(exc) });
   }

@@ -87,12 +87,17 @@ vs. mis-measurement.
 
 ## Vercel plan limits to know about
 
-- **Function duration.** A run streams via one long-lived serverless
-  function (`/api/runs/start`). Hobby caps functions at 60s regardless of
-  config; Pro allows up to 300s (`maxDuration` is already set there).
-  Keep `repeats × endpoints × cases` modest on Hobby, or split into
-  several smaller runs — a timeout doesn't lose already-completed results,
-  it just stops the batch partway through.
+- **Function duration — works on Hobby.** The run loop lives in the
+  browser, which calls `/api/runs/step` once per request. Each serverless
+  invocation therefore only has to outlive a *single* LLM call, not the
+  whole batch, so total run length is unbounded and `repeats × endpoints
+  × cases` can be as large as you like on Hobby's 60s-per-function limit.
+  The one thing that must fit in 60s is a single generation — if one
+  response legitimately takes longer, cap it with the prompt case's
+  **max tokens** rather than raising `maxDuration`.
+- **Keep the tab open.** Because the browser drives the loop, closing the
+  tab mid-run stops it. Results already completed are safely in Postgres;
+  the remaining steps just don't fire.
 - **No local filesystem persistence.** All state lives in Postgres, not a
   file, precisely because Vercel's filesystem doesn't persist between
   invocations.
@@ -114,7 +119,8 @@ app/
   api/
     endpoints/                CRUD + connection test
     cases/                    CRUD for prompt cases
-    runs/start/               SSE-streamed sequential run
+    runs/create/              create a run row
+    runs/step/                execute + persist one request
     runs/[id]/results/        results + percentile summaries
     results/[id]/rating/      manual quality rating
 lib/

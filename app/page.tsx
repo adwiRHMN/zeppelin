@@ -5,6 +5,25 @@ import type { AdapterName, Endpoint, PromptCase, RequestMetrics, RunRow, RunSumm
 
 type Tab = "endpoints" | "prompts" | "run" | "results";
 
+interface ConnStatus {
+  state: "checking" | "connected" | "model-missing" | "failed";
+  detail: string;
+}
+
+const CONN_LABEL: Record<ConnStatus["state"], string> = {
+  checking: "checking…",
+  connected: "connected",
+  "model-missing": "model missing",
+  failed: "unreachable",
+};
+
+const CONN_PILL: Record<ConnStatus["state"], string> = {
+  checking: "pill",
+  connected: "pill ok",
+  "model-missing": "pill warn",
+  failed: "pill err",
+};
+
 function fmt(v: number | null | undefined, digits = 3): string {
   if (v === null || v === undefined) return "-";
   return v.toFixed(digits);
@@ -67,7 +86,16 @@ function EndpointsTab({ endpoints, refresh }: { endpoints: Endpoint[]; refresh: 
   const [adapter, setAdapter] = useState<AdapterName>("openai_compat");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [testStatus, setTestStatus] = useState<Record<number, string>>({});
+  const [testStatus, setTestStatus] = useState<Record<number, ConnStatus>>({});
+
+  // Check every endpoint's reachability on load, so the table shows real
+  // connection state instead of leaving you to guess until a run fails.
+  useEffect(() => {
+    for (const e of endpoints) {
+      if (e.id != null && testStatus[e.id] === undefined) test(e.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpoints]);
 
   const add = async () => {
     if (!baseUrl || !model) return alert("Base URL and model are required.");
@@ -85,12 +113,27 @@ function EndpointsTab({ endpoints, refresh }: { endpoints: Endpoint[]; refresh: 
   };
 
   const test = async (id: number) => {
-    setTestStatus((s) => ({ ...s, [id]: "Testing..." }));
+    setTestStatus((s) => ({ ...s, [id]: { state: "checking", detail: "" } }));
     try {
-      const res = await api<{ ok: boolean; models?: string[]; error?: string }>(`/api/endpoints/${id}/test`, { method: "POST" });
-      setTestStatus((s) => ({ ...s, [id]: res.ok ? `OK (${res.models?.length ?? 0} models)` : "Failed: " + res.error }));
+      const res = await api<{ ok: boolean; models?: string[]; model_found?: boolean; error?: string }>(
+        `/api/endpoints/${id}/test`,
+        { method: "POST" }
+      );
+      if (!res.ok) {
+        setTestStatus((s) => ({ ...s, [id]: { state: "failed", detail: res.error ?? "unknown error" } }));
+      } else if (res.model_found === false) {
+        // Server is reachable but won't serve the configured model --
+        // worth its own state, since runs would fail with a far less
+        // obvious error.
+        setTestStatus((s) => ({
+          ...s,
+          [id]: { state: "model-missing", detail: `server OK, but model not found. Available: ${(res.models ?? []).join(", ") || "(none)"}` },
+        }));
+      } else {
+        setTestStatus((s) => ({ ...s, [id]: { state: "connected", detail: `${res.models?.length ?? 0} models available` } }));
+      }
     } catch (e) {
-      setTestStatus((s) => ({ ...s, [id]: "Failed" }));
+      setTestStatus((s) => ({ ...s, [id]: { state: "failed", detail: (e as Error).message } }));
     }
   };
 
@@ -125,18 +168,34 @@ function EndpointsTab({ endpoints, refresh }: { endpoints: Endpoint[]; refresh: 
       <div className="panel">
         <div className="toolbar"><h2>Endpoints</h2></div>
         <table>
-          <thead><tr><th>Name</th><th>Base URL</th><th>Adapter</th><th>Model</th><th></th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Base URL</th><th>Adapter</th><th>Model</th><th>Status</th><th></th><th></th></tr></thead>
           <tbody>
-            {endpoints.map((e) => (
-              <tr key={e.id}>
-                <td>{e.name}</td>
-                <td className="mono">{e.base_url}</td>
-                <td>{e.adapter}</td>
-                <td className="mono">{e.model}</td>
-                <td><button className="ghost" onClick={() => test(e.id!)}>{testStatus[e.id!] || "Test"}</button></td>
-                <td><button className="ghost" onClick={() => del(e.id!)}>Delete</button></td>
-              </tr>
-            ))}
+            {!endpoints.length && (
+              <tr><td colSpan={7} className="muted">No endpoints yet. Add one above.</td></tr>
+            )}
+            {endpoints.map((e) => {
+              const st = testStatus[e.id!];
+              return (
+                <tr key={e.id}>
+                  <td>{e.name}</td>
+                  <td className="mono">{e.base_url}</td>
+                  <td>{e.adapter}</td>
+                  <td className="mono">{e.model}</td>
+                  <td>
+                    {st ? (
+                      <span className={CONN_PILL[st.state]} title={st.detail}>{CONN_LABEL[st.state]}</span>
+                    ) : (
+                      <span className="pill">not checked</span>
+                    )}
+                    {st && st.state !== "checking" && st.detail && (
+                      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{st.detail}</div>
+                    )}
+                  </td>
+                  <td><button className="ghost" onClick={() => test(e.id!)}>Recheck</button></td>
+                  <td><button className="ghost" onClick={() => del(e.id!)}>Delete</button></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -259,60 +318,74 @@ function RunTab({
     setFn(next);
   };
 
+  const sleep = (s: number) => new Promise((r) => setTimeout(r, s * 1000));
+
   const start = async () => {
     if (selectedEndpoints.size === 0 || selectedCases.size === 0) {
       return alert("Pick at least one endpoint and one case.");
     }
-    setRunning(true);
-    setLog([]);
-    setStatus(warmup ? "Starting run — warmup request first (cold models can take a while)…" : "Starting run…");
-    try {
-      const resp = await fetch("/api/runs/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          endpoint_ids: [...selectedEndpoints],
-          case_ids: [...selectedCases],
-          repeats: parseInt(repeats, 10) || 1,
-          warmup,
-          delay_between_s: parseFloat(delay) || 0,
-        }),
-      });
-      if (!resp.body) throw new Error("no response body");
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      let runId: number | null = null;
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const chunks = buf.split("\n\n");
-        buf = chunks.pop() ?? "";
-        for (const chunk of chunks) {
-          let event = "message";
-          let data = "";
-          for (const line of chunk.split("\n")) {
-            if (line.startsWith("event:")) event = line.slice(6).trim();
-            if (line.startsWith("data:")) data = line.slice(5).trim();
-          }
-          if (!data) continue;
-          const parsed = JSON.parse(data);
-          if (event === "run_start") {
-            runId = parsed.run_id;
-            setStatus(`Run #${parsed.run_id} started — waiting for first response…`);
-          } else if (event === "result") {
-            setLog((l) => [...l, parsed]);
-            setStatus(parsed.is_warmup ? "Warmup done — starting timed requests…" : "Running…");
-          } else if (event === "run_error") {
-            setStatus("Run error: " + parsed.error);
-            console.error(parsed.error);
-          } else if (event === "run_done") {
-            setStatus("Run complete.");
-          }
+    // Build the full plan up front, then walk it one HTTP call at a time.
+    // Keeping the loop here rather than server-side is what makes this
+    // work on Vercel Hobby: each /api/runs/step invocation only has to
+    // outlive a single LLM request, not the whole batch.
+    const n = parseInt(repeats, 10) || 1;
+    const delayS = parseFloat(delay) || 0;
+    const plan: { endpoint_id: number; case_id: number; run_index: number; is_warmup: boolean }[] = [];
+    for (const endpointId of selectedEndpoints) {
+      for (const caseId of selectedCases) {
+        if (warmup) plan.push({ endpoint_id: endpointId, case_id: caseId, run_index: -1, is_warmup: true });
+        for (let i = 0; i < n; i++) {
+          plan.push({ endpoint_id: endpointId, case_id: caseId, run_index: i, is_warmup: false });
         }
       }
+    }
+
+    setRunning(true);
+    setLog([]);
+    setStatus("Creating run…");
+
+    let runId: number | null = null;
+    try {
+      const created = await api<{ run_id: number }>("/api/runs/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      runId = created.run_id;
+
+      for (let i = 0; i < plan.length; i++) {
+        const step = plan[i]!;
+        setStatus(
+          `Run #${runId} — request ${i + 1} of ${plan.length}` +
+            (step.is_warmup ? " (warmup, cold models can take a while)…" : "…")
+        );
+        try {
+          const metrics = await api<RequestMetrics>("/api/runs/step", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ run_id: runId, ...step }),
+          });
+          setLog((l) => [...l, metrics]);
+        } catch (e) {
+          // One failed step shouldn't abandon the rest of the run --
+          // record it and keep going.
+          setLog((l) => [
+            ...l,
+            {
+              endpoint_id: step.endpoint_id, case_id: step.case_id, run_index: step.run_index,
+              is_warmup: step.is_warmup, ok: false, error_message: (e as Error).message,
+              ttft_s: null, total_s: null, prompt_tokens: null, completion_tokens: null,
+              decode_tokens_per_s: null, server_load_s: null, server_prompt_eval_s: null,
+              server_eval_s: null, server_total_s: null, proxy_overhead_s: null,
+              response_text: "", rating: null, rating_notes: "",
+            } as RequestMetrics,
+          ]);
+        }
+        if (delayS && i < plan.length - 1) await sleep(delayS);
+      }
+
+      setStatus(`Run #${runId} complete — ${plan.length} requests.`);
       if (runId != null) onRunComplete(runId);
     } catch (e) {
       setStatus("Run failed: " + (e as Error).message);

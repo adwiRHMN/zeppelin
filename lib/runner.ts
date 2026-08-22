@@ -1,12 +1,11 @@
-// Sequential test runner: for each (endpoint, case) pair, optionally fires
-// a warmup request (to absorb cold-model load time) then N timed repeats,
-// back-to-back. Yields RequestMetrics as they complete so the API route
-// can stream progress to the GUI live rather than waiting for the whole
-// batch (important on Vercel, where a function has a hard time budget).
+// Single-request executor. One call here == one LLM request, measured
+// end to end. The browser drives the repeat/warmup loop and calls this
+// once per request through /api/runs/step, so no serverless invocation
+// ever has to span a whole batch.
 
 import { getAdapter } from "@/lib/adapters/base";
 import { computeDecodeRate } from "@/lib/metrics";
-import type { Endpoint, PromptCase, RequestMetrics, RunRequest } from "@/lib/types";
+import type { Endpoint, PromptCase, RequestMetrics } from "@/lib/types";
 
 async function executeOnce(
   endpoint: Endpoint,
@@ -83,38 +82,20 @@ async function executeOnce(
   };
 }
 
-const sleep = (s: number) => new Promise((resolve) => setTimeout(resolve, s * 1000));
-
-/** Runs every (endpoint, case) combination in the request, sequentially,
- * yielding each RequestMetrics as soon as it's available.
+/** Executes exactly one request and returns its metrics.
+ *
+ * The run loop lives in the browser rather than here: it calls this once
+ * per request via /api/runs/step. That keeps every serverless invocation
+ * to the length of a single LLM call instead of an entire batch, which
+ * is what makes long runs possible on Vercel's Hobby tier (60s per
+ * function). It also means a run's total length is unbounded -- only one
+ * individual request has to fit in the budget.
  */
-export async function* runSequential(
-  request: RunRequest,
-  endpoints: Map<number, Endpoint>,
-  cases: Map<number, PromptCase>
-): AsyncGenerator<RequestMetrics> {
-  for (const endpointId of request.endpoint_ids) {
-    const endpoint = endpoints.get(endpointId);
-    if (!endpoint) continue;
-
-    for (const caseId of request.case_ids) {
-      const promptCase = cases.get(caseId);
-      if (!promptCase) continue;
-
-      if (request.warmup) {
-        // Yield the warmup result too, even though summarize() filters it
-        // out of the stats. A cold model can take a minute to load, and
-        // swallowing this entirely leaves the UI silent for that whole
-        // time with no sign the run is alive.
-        yield await executeOnce(endpoint, promptCase, -1, true);
-        if (request.delay_between_s) await sleep(request.delay_between_s);
-      }
-
-      for (let i = 0; i < request.repeats; i++) {
-        const metrics = await executeOnce(endpoint, promptCase, i, false);
-        yield metrics;
-        if (request.delay_between_s && i < request.repeats - 1) await sleep(request.delay_between_s);
-      }
-    }
-  }
+export async function runSingleRequest(
+  endpoint: Endpoint,
+  promptCase: PromptCase,
+  runIndex: number,
+  isWarmup: boolean
+): Promise<RequestMetrics> {
+  return executeOnce(endpoint, promptCase, runIndex, isWarmup);
 }
