@@ -2,6 +2,7 @@
 // latency, mean decode throughput. Pure functions -- no I/O.
 
 import type { RequestMetrics, RunSummary } from "@/lib/types";
+import { parseChecks } from "@/lib/types";
 
 export function percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
@@ -24,6 +25,15 @@ export function summarize(endpointId: number, caseId: number, metrics: RequestMe
   const totals = ok.map((m) => m.total_s).filter((v): v is number => v != null);
   const tps = ok.map((m) => m.decode_tokens_per_s).filter((v): v is number => v != null);
 
+  let faithfulnessChecked = 0;
+  let faithfulnessPassed = 0;
+  for (const m of ok) {
+    const check = parseChecks(m.checks_json).find((c) => c.name === "faithfulness");
+    if (!check) continue;
+    faithfulnessChecked++;
+    if (check.passed) faithfulnessPassed++;
+  }
+
   return {
     endpoint_id: endpointId,
     case_id: caseId,
@@ -37,6 +47,8 @@ export function summarize(endpointId: number, caseId: number, metrics: RequestMe
     total_p95: percentile(totals, 95),
     total_p99: percentile(totals, 99),
     decode_tps_mean: tps.length ? tps.reduce((a, b) => a + b, 0) / tps.length : null,
+    faithfulness_checked: faithfulnessChecked,
+    faithfulness_passed: faithfulnessPassed,
   };
 }
 

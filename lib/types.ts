@@ -19,6 +19,19 @@ export interface PromptCase {
   temperature: number;
   max_tokens: number | null;
   seed: number | null;
+
+  // JSON Schema text, passed to the model as a structured-output
+  // constraint: Ollama's `format` field, or OpenAI-compatible
+  // `response_format: {type: "json_schema", ...}`. Null/empty = no
+  // constraint requested.
+  json_schema: string | null;
+  // Ground-truth data (e.g. a metrics bundle) as JSON text. Used as the
+  // source of truth for the faithfulness check -- every number the model
+  // outputs must trace back to a value in here.
+  input_data: string | null;
+  // If true and input_data is set, every result for this case is
+  // auto-scored against the faithfulness check.
+  faithfulness_check: boolean;
 }
 
 // One normalized event an adapter yields while streaming a response.
@@ -63,6 +76,27 @@ export interface RequestMetrics {
 
   rating: number | null;
   rating_notes: string;
+
+  // JSON-stringified CheckResult[] -- mirrors the DB column literally
+  // (like the rest of this type), so it's parsed on demand rather than
+  // carried as a structured field that would need reconciling on read.
+  checks_json: string;
+}
+
+export interface CheckResult {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export function parseChecks(checksJson: string | null | undefined): CheckResult[] {
+  if (!checksJson) return [];
+  try {
+    const parsed = JSON.parse(checksJson);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 export interface RunRequest {
@@ -86,6 +120,10 @@ export interface RunSummary {
   total_p95: number | null;
   total_p99: number | null;
   decode_tps_mean: number | null;
+  // Faithfulness pass rate among results that actually had the check
+  // configured -- null if none in this group did (not "0/0 passed").
+  faithfulness_checked: number;
+  faithfulness_passed: number;
 }
 
 export interface RunRow {

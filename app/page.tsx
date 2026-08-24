@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import type { AdapterName, Endpoint, PromptCase, RequestMetrics, RunRow, RunSummary } from "@/lib/types";
+import { parseChecks } from "@/lib/types";
 
 type Tab = "endpoints" | "prompts" | "run" | "results";
 
@@ -27,6 +28,15 @@ const CONN_PILL: Record<ConnStatus["state"], string> = {
 function fmt(v: number | null | undefined, digits = 3): string {
   if (v === null || v === undefined) return "-";
   return v.toFixed(digits);
+}
+
+function isValidJson(s: string): boolean {
+  try {
+    JSON.parse(s);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -250,9 +260,17 @@ function PromptsTab({ cases, refresh }: { cases: PromptCase[]; refresh: () => vo
   const [temp, setTemp] = useState("0.7");
   const [maxTokens, setMaxTokens] = useState("");
   const [seed, setSeed] = useState("");
+  const [jsonSchema, setJsonSchema] = useState("");
+  const [inputData, setInputData] = useState("");
+  const [faithfulnessCheck, setFaithfulnessCheck] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
 
   const add = async () => {
     if (!user) return alert("User prompt is required.");
+    if (jsonSchema.trim() && !isValidJson(jsonSchema)) return alert("JSON Schema is not valid JSON.");
+    if (inputData.trim() && !isValidJson(inputData)) return alert("Input data / bundle is not valid JSON.");
     try {
       await api("/api/cases", {
         method: "POST",
@@ -264,9 +282,13 @@ function PromptsTab({ cases, refresh }: { cases: PromptCase[]; refresh: () => vo
           temperature: parseFloat(temp) || 0.7,
           max_tokens: maxTokens ? parseInt(maxTokens, 10) : null,
           seed: seed ? parseInt(seed, 10) : null,
+          json_schema: jsonSchema.trim() || null,
+          input_data: inputData.trim() || null,
+          faithfulness_check: faithfulnessCheck,
         }),
       });
       setName(""); setSystem(""); setUser(""); setMaxTokens(""); setSeed("");
+      setJsonSchema(""); setInputData(""); setFaithfulnessCheck(false);
       refresh();
     } catch (e) {
       alert("Failed to add prompt case: " + (e as Error).message);
@@ -279,6 +301,30 @@ function PromptsTab({ cases, refresh }: { cases: PromptCase[]; refresh: () => vo
       refresh();
     } catch (e) {
       alert("Failed to delete prompt case: " + (e as Error).message);
+    }
+  };
+
+  const runImport = async () => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(importText);
+    } catch (e) {
+      return alert("Import text is not valid JSON: " + (e as Error).message);
+    }
+    if (!Array.isArray(parsed)) return alert("Import JSON must be an array of case objects.");
+    try {
+      const res = await api<{ created_count: number; error_count: number; errors: { index: number; error: string }[] }>(
+        "/api/cases/bulk",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cases: parsed }) }
+      );
+      let msg = `Imported ${res.created_count} case(s).`;
+      if (res.error_count) msg += ` ${res.error_count} failed: ` + res.errors.map((e) => `#${e.index}: ${e.error}`).join("; ");
+      alert(msg);
+      setImportText("");
+      setShowImport(false);
+      refresh();
+    } catch (e) {
+      alert("Bulk import failed: " + (e as Error).message);
     }
   };
 
@@ -296,18 +342,61 @@ function PromptsTab({ cases, refresh }: { cases: PromptCase[]; refresh: () => vo
           <div className="field"><label>System prompt (optional)</label><textarea value={system} onChange={(e) => setSystem(e.target.value)} /></div>
           <div className="field"><label>User prompt</label><textarea value={user} onChange={(e) => setUser(e.target.value)} /></div>
         </div>
+
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="ghost" onClick={() => setShowAdvanced((v) => !v)}>
+            {showAdvanced ? "Hide" : "Show"} structured output / faithfulness options
+          </button>
+        </div>
+        {showAdvanced && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <div className="field">
+              <label>JSON Schema (optional — constrains model output)</label>
+              <textarea value={jsonSchema} onChange={(e) => setJsonSchema(e.target.value)} placeholder='{"type":"object","properties":{"insights":{"type":"array",...}}}' />
+            </div>
+            <div className="field">
+              <label>Input data / bundle (optional — ground truth for faithfulness)</label>
+              <textarea value={inputData} onChange={(e) => setInputData(e.target.value)} placeholder='{"period":"2026-08","pnl":{"revenue":1633025,...}}' />
+            </div>
+          </div>
+        )}
+        {showAdvanced && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <input type="checkbox" checked={faithfulnessCheck} onChange={(e) => setFaithfulnessCheck(e.target.checked)} />
+              Check faithfulness — every number in the response must trace to the bundle above (empty output is treated as valid)
+            </label>
+          </div>
+        )}
+
         <div className="row" style={{ marginTop: 8 }}><button className="primary" onClick={add}>Add case</button></div>
       </div>
+
       <div className="panel">
-        <h2>Prompt cases</h2>
+        <div className="toolbar">
+          <h2>Prompt cases</h2>
+          <button className="ghost" onClick={() => setShowImport((v) => !v)}>{showImport ? "Hide" : "Import from JSON"}</button>
+        </div>
+        {showImport && (
+          <div className="row" style={{ marginBottom: 12 }}>
+            <div className="field">
+              <label>Array of case objects (name, user_prompt required; system_prompt, temperature, max_tokens, seed, json_schema, input_data, faithfulness_check optional)</label>
+              <textarea value={importText} onChange={(e) => setImportText(e.target.value)} style={{ minHeight: 120 }} placeholder='[{"name":"case-1","user_prompt":"...","input_data":"{...}","faithfulness_check":true}]' />
+            </div>
+            <button className="primary" onClick={runImport}>Import</button>
+          </div>
+        )}
         <table>
-          <thead><tr><th>Name</th><th>Prompt</th><th>Temp</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Prompt</th><th>Temp</th><th>Schema</th><th>Faithfulness</th><th></th></tr></thead>
           <tbody>
+            {!cases.length && <tr><td colSpan={6} className="muted">No prompt cases yet.</td></tr>}
             {cases.map((c) => (
               <tr key={c.id}>
                 <td>{c.name}</td>
                 <td className="mono">{c.user_prompt.length > 60 ? c.user_prompt.slice(0, 60) + "…" : c.user_prompt}</td>
                 <td className="num">{c.temperature}</td>
+                <td>{c.json_schema ? <span className="pill ok">yes</span> : <span className="muted">-</span>}</td>
+                <td>{c.faithfulness_check ? <span className="pill ok">on</span> : <span className="muted">-</span>}</td>
                 <td><button className="ghost" onClick={() => del(c.id!)}>Delete</button></td>
               </tr>
             ))}
@@ -425,7 +514,7 @@ function RunTab({
               ttft_s: null, total_s: null, prompt_tokens: null, completion_tokens: null,
               decode_tokens_per_s: null, server_load_s: null, server_prompt_eval_s: null,
               server_eval_s: null, server_total_s: null, proxy_overhead_s: null,
-              response_text: "", rating: null, rating_notes: "",
+              response_text: "", rating: null, rating_notes: "", checks_json: "",
             } as RequestMetrics,
           ]);
         }
@@ -575,7 +664,7 @@ function ResultsTab({
       "id", "endpoint_id", "case_id", "run_index", "is_warmup", "ok", "error_message",
       "ttft_s", "total_s", "prompt_tokens", "completion_tokens", "decode_tokens_per_s",
       "server_load_s", "server_prompt_eval_s", "server_eval_s", "server_total_s", "proxy_overhead_s",
-      "rating", "rating_notes",
+      "rating", "rating_notes", "checks_json",
     ] as const;
     const lines = [cols.join(",")];
     for (const r of results) {
@@ -613,7 +702,7 @@ function ResultsTab({
         <table>
           <thead><tr>
             <th>Endpoint</th><th>Case</th><th>N</th><th>Errors</th>
-            <th>TTFT p50</th><th>TTFT p95</th><th>Total p50</th><th>Total p95</th><th>Tok/s</th>
+            <th>TTFT p50</th><th>TTFT p95</th><th>Total p50</th><th>Total p95</th><th>Tok/s</th><th>Faithful</th>
           </tr></thead>
           <tbody>
             {summaries.map((s, i) => {
@@ -630,6 +719,13 @@ function ResultsTab({
                   <td className="num">{fmt(s.total_p50)}</td>
                   <td className="num">{fmt(s.total_p95)}</td>
                   <td className="num">{fmt(s.decode_tps_mean, 1)}</td>
+                  <td className="num">
+                    {s.faithfulness_checked
+                      ? <span className={s.faithfulness_passed === s.faithfulness_checked ? "pill ok" : "pill err"}>
+                          {s.faithfulness_passed}/{s.faithfulness_checked}
+                        </span>
+                      : <span className="muted">-</span>}
+                  </td>
                 </tr>
               );
             })}
@@ -640,33 +736,54 @@ function ResultsTab({
         <h2>Individual requests</h2>
         <table>
           <thead><tr>
-            <th>#</th><th>Status</th><th>TTFT</th><th>Total</th><th>Tok/s</th><th>Rating</th><th></th>
+            <th>#</th><th>Status</th><th>TTFT</th><th>Total</th><th>Tok/s</th><th>Checks</th><th>Rating</th><th></th>
           </tr></thead>
           <tbody>
-            {detailRows.map((r) => (
-              <Fragment key={r.id}>
-                <tr>
-                  <td className="num">{r.run_index}</td>
-                  <td>{r.ok ? <span className="pill ok">ok</span> : <span className="pill err" title={r.error_message}>error</span>}</td>
-                  <td className="num">{fmt(r.ttft_s)}</td>
-                  <td className="num">{fmt(r.total_s)}</td>
-                  <td className="num">{fmt(r.decode_tokens_per_s, 1)}</td>
-                  <td>
-                    <div className="stars">
-                      {[1, 2, 3, 4, 5].map((n) => (
-                        <span key={n} className={r.rating && n <= r.rating ? "filled" : ""} onClick={() => rate(r.id!, n)}>★</span>
-                      ))}
-                    </div>
-                  </td>
-                  <td><button className="ghost" onClick={() => toggleExpand(r.id!)}>View</button></td>
-                </tr>
-                {expanded.has(r.id!) && (
+            {detailRows.map((r) => {
+              const checks = parseChecks(r.checks_json);
+              return (
+                <Fragment key={r.id}>
                   <tr>
-                    <td colSpan={7}><div className="response-preview">{r.response_text}</div></td>
+                    <td className="num">{r.run_index}</td>
+                    <td>{r.ok ? <span className="pill ok">ok</span> : <span className="pill err" title={r.error_message}>error</span>}</td>
+                    <td className="num">{fmt(r.ttft_s)}</td>
+                    <td className="num">{fmt(r.total_s)}</td>
+                    <td className="num">{fmt(r.decode_tokens_per_s, 1)}</td>
+                    <td>
+                      {checks.length
+                        ? checks.map((c) => (
+                            <span key={c.name} className={c.passed ? "pill ok" : "pill err"} title={c.detail} style={{ marginRight: 4 }}>
+                              {c.name}
+                            </span>
+                          ))
+                        : <span className="muted">-</span>}
+                    </td>
+                    <td>
+                      <div className="stars">
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <span key={n} className={r.rating && n <= r.rating ? "filled" : ""} onClick={() => rate(r.id!, n)}>★</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td><button className="ghost" onClick={() => toggleExpand(r.id!)}>View</button></td>
                   </tr>
-                )}
-              </Fragment>
-            ))}
+                  {expanded.has(r.id!) && (
+                    <tr>
+                      <td colSpan={8}>
+                        <div className="response-preview">{r.response_text}</div>
+                        {checks.length > 0 && (
+                          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                            {checks.map((c) => (
+                              <div key={c.name}>{c.name}: {c.passed ? "pass" : "fail"} — {c.detail}</div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

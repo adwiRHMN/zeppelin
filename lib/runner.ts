@@ -79,6 +79,7 @@ async function executeOnce(
     response_text: textParts.join(""),
     rating: null,
     rating_notes: "",
+    checks_json: "",
   };
 }
 

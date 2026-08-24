@@ -22,7 +22,22 @@ function buildPayload(endpoint: Endpoint, promptCase: PromptCase) {
   if (promptCase.seed != null) options.seed = promptCase.seed;
   if (promptCase.max_tokens != null) options.num_predict = promptCase.max_tokens;
 
-  return { model: endpoint.model, messages, stream: true, options };
+  const payload: Record<string, unknown> = { model: endpoint.model, messages, stream: true, options };
+
+  // Ollama's `format` field takes either the literal string "json" or a
+  // full JSON Schema object, enforced via grammar-constrained decoding.
+  // A schema that fails to parse is dropped rather than sent malformed --
+  // the case form validates JSON before saving, so this is a defensive
+  // fallback, not the primary check.
+  if (promptCase.json_schema) {
+    try {
+      payload.format = JSON.parse(promptCase.json_schema);
+    } catch {
+      // ignore -- request proceeds without a format constraint
+    }
+  }
+
+  return payload;
 }
 
 async function* streamChat(endpoint: Endpoint, promptCase: PromptCase): AsyncGenerator<StreamEvent> {

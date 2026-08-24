@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS prompt_cases (
     seed INTEGER
 );
 
+-- Added after the initial migration -- ADD COLUMN IF NOT EXISTS so this
+-- script stays idempotent for both a fresh database and one already at
+-- the earlier schema version.
+ALTER TABLE prompt_cases ADD COLUMN IF NOT EXISTS json_schema TEXT;
+ALTER TABLE prompt_cases ADD COLUMN IF NOT EXISTS input_data TEXT;
+ALTER TABLE prompt_cases ADD COLUMN IF NOT EXISTS faithfulness_check BOOLEAN NOT NULL DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS runs (
     id SERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -50,5 +57,7 @@ CREATE TABLE IF NOT EXISTS results (
     rating INTEGER,
     rating_notes TEXT NOT NULL DEFAULT ''
 );
+
+ALTER TABLE results ADD COLUMN IF NOT EXISTS checks_json TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_results_run_id ON results(run_id);

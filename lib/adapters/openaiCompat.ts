@@ -30,6 +30,20 @@ function buildPayload(endpoint: Endpoint, promptCase: PromptCase) {
   };
   if (promptCase.max_tokens != null) payload.max_tokens = promptCase.max_tokens;
   if (promptCase.seed != null) payload.seed = promptCase.seed;
+
+  // OpenAI-compatible structured output. Whether the backend behind
+  // OpenWebUI's proxy actually honors this (vs. silently dropping it) is
+  // exactly the kind of thing worth testing here rather than assuming --
+  // a schema that fails to parse is dropped rather than sent malformed.
+  if (promptCase.json_schema) {
+    try {
+      const schema = JSON.parse(promptCase.json_schema);
+      payload.response_format = { type: "json_schema", json_schema: { name: "response", schema, strict: true } };
+    } catch {
+      // ignore -- request proceeds without a format constraint
+    }
+  }
+
   return payload;
 }
 

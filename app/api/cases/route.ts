@@ -21,6 +21,9 @@ export async function POST(req: Request) {
     temperature: body.temperature ?? 0.7,
     max_tokens: body.max_tokens ?? null,
     seed: body.seed ?? null,
+    json_schema: body.json_schema ?? null,
+    input_data: body.input_data ?? null,
+    faithfulness_check: body.faithfulness_check ?? false,
   };
   return NextResponse.json(await createCase(promptCase));
 }
